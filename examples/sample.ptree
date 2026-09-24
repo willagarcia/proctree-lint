@@ -1,0 +1,9 @@
+# pid ppid state command
+# state follows the ps convention: R running, S sleeping, D disk wait,
+# Z zombie, T stopped. Only the first letter is checked.
+1 0 S init
+100 1 S sshd
+101 100 S sshd: worker
+101 100 S sshd: worker
+200 1 Z curl
+300 999 S orphaned-daemon

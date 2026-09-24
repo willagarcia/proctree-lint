@@ -1,0 +1,10 @@
+[package]
+name = "proctree-lint"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "proctree-lint"
+path = "src/main.rs"
+
+[dependencies]
