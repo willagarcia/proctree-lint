@@ -2,8 +2,8 @@
 
 A linter for process tree snapshots. Point it at a text dump of `pid ppid
 state command` rows and it reports structural problems by line number:
-duplicate pids, processes whose parent doesn't exist in the snapshot, and
-zombies.
+duplicate pids, processes whose parent doesn't exist in the snapshot,
+parent/child cycles, and zombies.
 
 I keep hitting the same problem when triaging a stuck box: someone pastes a
 `ps -ef --forest` dump into a ticket, and figuring out which branch is
@@ -59,11 +59,12 @@ a CI step without extra glue.
 | `duplicate-pid`  | the same pid appears more than once in the snapshot              |
 | `orphan-process` | a process's ppid doesn't match any pid in the snapshot           |
 | `zombie-process` | a process is in the `Z` state                                   |
+| `parent-cycle`   | two or more processes are each other's ancestors (a process that is its own parent is tolerated) |
 
 ## Status
 
 Early. No dependencies, standard library only. See the issue tracker for
-what's planned next (cycle detection, a `--baseline` mode to diff two
+what's planned next (a `--baseline` mode to diff two
 snapshots, depth limits).
 
 ## License

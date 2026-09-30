@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -135,12 +135,68 @@ fn lint_zombies(processes: &[Process]) -> Vec<Finding> {
         .collect()
 }
 
+// Follows ppid links upward from every pid. A self-parent is tolerated (see
+// lint_missing_parents), so only loops of two or more processes count. Each
+// cycle is reported once, on its earliest line. When a pid is duplicated the
+// first definition wins, since duplicate-pid already flags the later ones.
+fn lint_cycles(processes: &[Process]) -> Vec<Finding> {
+    let mut parent: HashMap<u32, (u32, usize)> = HashMap::new();
+    let mut order: Vec<u32> = Vec::new();
+    for p in processes {
+        if !parent.contains_key(&p.pid) {
+            parent.insert(p.pid, (p.ppid, p.line));
+            order.push(p.pid);
+        }
+    }
+
+    let mut findings = Vec::new();
+    let mut done: HashSet<u32> = HashSet::new();
+    for &start in &order {
+        if done.contains(&start) {
+            continue;
+        }
+        let mut path: Vec<u32> = Vec::new();
+        let mut position: HashMap<u32, usize> = HashMap::new();
+        let mut cur = start;
+        loop {
+            if done.contains(&cur) {
+                break;
+            }
+            if let Some(&i) = position.get(&cur) {
+                let members = &path[i..];
+                let line = members.iter().map(|pid| parent[pid].1).min().unwrap_or(0);
+                let mut chain: Vec<String> = members.iter().map(|pid| pid.to_string()).collect();
+                chain.push(members[0].to_string());
+                findings.push(Finding {
+                    line,
+                    rule: "parent-cycle",
+                    message: format!(
+                        "{} processes are their own ancestors: {}",
+                        members.len(),
+                        chain.join(" -> ")
+                    ),
+                });
+                break;
+            }
+            position.insert(cur, path.len());
+            path.push(cur);
+            match parent.get(&cur) {
+                Some(&(ppid, _)) if ppid != 0 && ppid != cur => cur = ppid,
+                _ => break,
+            }
+        }
+        done.extend(path);
+    }
+    findings
+}
+
 fn run(path: &str) -> Result<Vec<Finding>, String> {
     let source = fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path, e))?;
     let (processes, mut findings) = parse(&source);
     findings.extend(lint_duplicate_pids(&processes));
     findings.extend(lint_missing_parents(&processes));
     findings.extend(lint_zombies(&processes));
+    findings.extend(lint_cycles(&processes));
     findings.sort_by_key(|f| f.line);
     Ok(findings)
 }
@@ -169,5 +225,41 @@ fn main() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cycles(source: &str) -> Vec<Finding> {
+        let (processes, _) = parse(source);
+        lint_cycles(&processes)
+    }
+
+    #[test]
+    fn two_process_cycle_is_reported_once() {
+        let found = cycles("1 0 S init\n10 20 S a\n20 10 S b\n");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line, 2);
+        assert_eq!(found[0].message, "2 processes are their own ancestors: 10 -> 20 -> 10");
+    }
+
+    #[test]
+    fn descendants_of_a_cycle_are_not_members() {
+        let found = cycles("10 20 S a\n20 10 S b\n30 10 S child\n");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].message.starts_with("2 processes"));
+    }
+
+    #[test]
+    fn self_parent_and_healthy_tree_are_clean() {
+        assert!(cycles("5 5 S solo\n1 0 S init\n2 1 S child\n").is_empty());
+    }
+
+    #[test]
+    fn separate_cycles_are_each_reported() {
+        let found = cycles("1 2 S a\n2 1 S b\n3 4 S c\n4 5 S d\n5 3 S e\n");
+        assert_eq!(found.len(), 2);
     }
 }
